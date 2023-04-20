@@ -8,11 +8,11 @@ pub struct Args {
     #[clap(default_value_t = Uri::from_static(&"http://127.0.0.1:8080/person"))]
     pub target_url: Uri,
 
-    #[clap(short, long, default_value_t = 128, value_parser = connection_in_range)]
+    #[clap(short, long, default_value_t = 2, value_parser = connection_in_range)]
     pub connections: u16,
 
-    #[clap(short, long, default_value_t = 1_0_000)]
-    pub number_of_requests: u64,
+    #[clap(short, long, default_value_t = 1000)]
+    pub interval_ms: u64,
 
     #[clap(short, long)]
     pub output_file: Option<PathBuf>,
