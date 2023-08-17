@@ -29,10 +29,10 @@ static int32_t read_full(int fd, char *buf, size_t n)
     {
         ssize_t rv = read(fd, buf, n);
 
-        if (rv < 0)
+        if (rv <= 0)
             return -1; // error or EOF
 
-        assert((ssize_t)rv <= n);
+        assert((size_t)rv <= n);
         n -= (size_t)rv;
         buf += rv;
     }
@@ -46,10 +46,10 @@ static int32_t write_all(int fd, const char *buf, size_t n)
     {
         ssize_t rv = write(fd, buf, n);
 
-        if (rv < 0)
+        if (rv <= 0)
             return -1; // error
 
-        assert((ssize_t)rv <= n);
+        assert((size_t)rv <= n);
         n -= (size_t)rv;
         buf += rv;
     }
@@ -66,9 +66,13 @@ static int32_t one_request(int connfd)
     if (err)
     {
         if (errno == 0)
+        {
             msg("read() EOF");
+        }
         else
+        {
             msg("read() error");
+        }
         return err;
     }
 
@@ -96,6 +100,7 @@ static int32_t one_request(int connfd)
     // reply using the same protocol
     const char reply[] = "world";
     char wbuf[4 + sizeof(reply)];
+    len = (uint32_t)strlen(reply);
     memcpy(wbuf, &len, 4);
     memcpy(&wbuf[4], reply, len);
 
@@ -105,9 +110,10 @@ static int32_t one_request(int connfd)
 int main()
 {
     int fd = socket(AF_INET, SOCK_STREAM, 0);
-
     if (fd < 0)
-        die("socket() error");
+    {
+        die("socket()");
+    }
 
     // optval is 1, so we can reuse the port immediately after the server exits.
     int optval = 1;
@@ -121,13 +127,17 @@ int main()
 
     int rv = bind(fd, (struct sockaddr *)&addr, sizeof(addr));
 
-    if (rv < 0)
+    if (rv)
+    {
         die("bind() error");
+    }
 
     // listen for incoming connections
     rv = listen(fd, SOMAXCONN);
-    if (rv < 0)
+    if (rv)
+    {
         die("listen() error");
+    }
 
     while (true)
     {
@@ -143,7 +153,9 @@ int main()
         {
             int32_t err = one_request(connfd);
             if (err)
+            {
                 break;
+            }
         }
 
         close(connfd);

@@ -32,7 +32,7 @@ static int32_t read_full(int fd, char *buf, size_t n)
         if (rv < 0)
             return -1; // error or EOF
 
-        assert((ssize_t)rv <= n);
+        assert((size_t)rv <= n);
         n -= (size_t)rv;
         buf += rv;
     }
@@ -49,7 +49,7 @@ static int32_t write_all(int fd, const char *buf, size_t n)
         if (rv < 0)
             return -1; // error
 
-        assert((ssize_t)rv <= n);
+        assert((size_t)rv <= n);
         n -= (size_t)rv;
         buf += rv;
     }
@@ -121,18 +121,24 @@ int main()
     if (rv < 0)
         die("connect");
 
-    // send data
-    char msg[] = "hello";
-    write(fd, msg, strlen(msg));
+    // send queries to server
+    int32_t err = query(fd, "hello1");
+    if (err)
+        goto L_DONE;
 
-    // receive data
-    char rbuf[64] = {};
-    ssize_t n = read(fd, rbuf, sizeof(rbuf) - 1);
+    err = query(fd, "hello2");
+    if (err)
+        goto L_DONE;
 
-    if (n < 0)
-        die("read");
+    err = query(fd, "hello3");
+    if (err)
+        goto L_DONE;
 
-    printf("server says: %s\n", rbuf);
+    err = query(fd, "hello4");
+    if (err)
+        goto L_DONE;
+
+L_DONE:
     close(fd);
     return 0;
 }
