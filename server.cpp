@@ -141,7 +141,7 @@ static bool try_fill_buffer(Conn *conn)
     ssize_t rv = 0;
     do
     {
-        size_t cap = sizeof(conn->rbuf) - conn->rbuf_size;
+        size_t cap = sizeof(conn->rbuf) - conn->rbuf_size; // remaining capacity
         rv = read(conn->fd, &conn->rbuf[conn->rbuf_size], cap);
     } while (rv < 0 && errno == EINTR);
     if (rv < 0 && errno == EAGAIN)
@@ -173,7 +173,6 @@ static bool try_fill_buffer(Conn *conn)
     assert(conn->rbuf_size <= sizeof(conn->rbuf));
 
     // Try to process requests one by one.
-    // Why is there a loop? Please read the explanation of "pipelining".
     while (try_one_request(conn))
     {
     }
@@ -351,6 +350,7 @@ int main()
                 }
             }
         }
+
         // try to accept a new connection if the listening fd is active
         if (poll_args[0].revents)
         {

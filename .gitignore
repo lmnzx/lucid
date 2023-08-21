@@ -4,3 +4,4 @@ client.*
 server.*
 !client.cpp
 !server.cpp
+.DS_STORE
