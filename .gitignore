@@ -1,6 +1,4 @@
-client
 server
-client.*
 server.*
 !client.cpp
 !server.cpp
