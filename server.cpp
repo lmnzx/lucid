@@ -234,7 +234,6 @@ static bool try_one_request(Conn *conn)
     }
 
     // got one request, generate the response
-    // printf("client says: %.*s\n", len, &conn->rbuf[4]);
     uint32_t rescode = 0;
     uint32_t wlen = 0;
     int32_t err = do_request(&conn->rbuf[4], len, &rescode, &conn->wbuf[4 + 4], &wlen);
@@ -245,10 +244,7 @@ static bool try_one_request(Conn *conn)
         return false;
     }
 
-    // // generating echoing response
-    // memcpy(&conn->wbuf[0], &len, 4);
-    // memcpy(&conn->wbuf[4], &conn->rbuf[4], len);
-    // conn->wbuf_size = 4 + len;
+    // generating echoing response
     wlen += 4;
     memcpy(&conn->wbuf[0], &wlen, 4);
     memcpy(&conn->wbuf[4], &rescode, 4);
