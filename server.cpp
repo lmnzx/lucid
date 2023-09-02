@@ -14,6 +14,12 @@
 #include <map>
 #include <string>
 
+#include "hashtable.h"
+
+#define container_of(ptr, type, member) ({              \
+    const typeof(((type *)0)->member) *__mptr = (ptr);  \
+    (type *)((char *)__mptr - offsetof(type, member)); })
+
 const size_t k_max_msg = 4096;
 
 enum
@@ -88,12 +94,26 @@ static void state_res(Conn *conn)
     }
 }
 
-//* basic redis functions
+//* redis functionality
 enum
 {
     RES_OK = 0,
     RES_ERR = 1,
     RES_NX = 2,
+};
+
+// data structure for the key space
+static struct
+{
+    HMap db;
+} g_data;
+
+// the stucture for the key
+struct Entry
+{
+    struct HNode node;
+    std::string key;
+    std::string val;
 };
 
 const size_t k_max_args = 1024;
@@ -136,18 +156,38 @@ static int32_t parse_req(
     return 0;
 }
 
-// placeholder datastructure
-static std::map<std::string, std::string> g_map;
+static bool entry_eq(HNode *lhs, HNode *rhs)
+{
+    struct Entry *le = container_of(lhs, struct Entry, node); // lhs entry
+    struct Entry *re = container_of(rhs, struct Entry, node); // rhs entry
+    // compare the key and hash code of the two entries
+    return lhs->hcode == rhs->hcode && le->key == re->key;
+}
+
+static uint64_t str_hash(const uint8_t *data, size_t len)
+{
+    uint64_t h = 0x811C9DC5; // FNV1A hash
+    for (size_t i = 0; i < len; i++)
+    {
+        h = h * 31 + data[i];
+    }
+    return h;
+}
 
 static uint32_t do_get(
-    const std::vector<std::string> &cmd, uint8_t *res, uint32_t *reslen)
+    std::vector<std::string> &cmd, uint8_t *res, uint32_t *reslen)
 {
-    if (!g_map.count(cmd[1]))
+    Entry key;
+    key.key.swap(cmd[1]);
+    key.node.hcode = str_hash((uint8_t *)key.key.data(), key.key.size());
+
+    HNode *node = hm_lookup(&g_data.db, &key.node, entry_eq);
+    if (!node)
     {
         return RES_NX;
     }
 
-    std::string &val = g_map[cmd[1]];
+    const std::string &val = container_of(node, Entry, node)->val;
     assert(val.size() <= k_max_msg);
     memcpy(res, val.data(), val.size());
     *reslen = (uint32_t)val.size();
@@ -155,20 +195,46 @@ static uint32_t do_get(
 }
 
 static uint32_t do_set(
-    const std::vector<std::string> &cmd, uint8_t *res, uint32_t *reslen)
+    std::vector<std::string> &cmd, uint8_t *res, uint32_t *reslen)
 {
     (void)res;
     (void)reslen;
-    g_map[cmd[1]] = cmd[2];
+
+    Entry key;
+    key.key.swap(cmd[1]);
+    key.node.hcode = str_hash((uint8_t *)key.key.data(), key.key.size());
+
+    HNode *node = hm_lookup(&g_data.db, &key.node, &entry_eq);
+    if (node)
+    {
+        container_of(node, Entry, node)->val.swap(cmd[2]);
+    }
+    else
+    {
+        Entry *ent = new Entry();
+        ent->key.swap(key.key);
+        ent->node.hcode = key.node.hcode;
+        ent->val.swap(cmd[2]);
+        hm_insert(&g_data.db, &ent->node);
+    }
     return RES_OK;
 }
 
 static uint32_t do_del(
-    const std::vector<std::string> &cmd, uint8_t *res, uint32_t *reslen)
+    std::vector<std::string> &cmd, uint8_t *res, uint32_t *reslen)
 {
     (void)res;
     (void)reslen;
-    g_map.erase(cmd[1]);
+
+    Entry key;
+    key.key.swap(cmd[1]);
+    key.node.hcode = str_hash((uint8_t *)key.key.data(), key.key.size());
+
+    HNode *node = hm_pop(&g_data.db, &key.node, &entry_eq);
+    if (node)
+    {
+        delete container_of(node, Entry, node);
+    }
     return RES_OK;
 }
 
