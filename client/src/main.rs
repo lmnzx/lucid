@@ -195,7 +195,27 @@ fn read_res(fd: &mut TcpStream) -> io::Result<()> {
         SerType::Err { code, message } => println!("(err) {} {}", code, message),
         SerType::Str(value) => println!("(str) {}", value),
         SerType::Int(value) => println!("(int) {}", value),
-        SerType::Arr(_) => println!("(arr) len={}", len),
+        SerType::Arr(value) => {
+            println!("(arr) len={}", value.len() / 6);
+            for i in 0..value.len() / 6 {
+                let mut arr = [0u8; 6];
+                arr.copy_from_slice(&value[i * 6..(i + 1) * 6]);
+                let rv = on_response(&arr).unwrap();
+                match rv {
+                    SerType::Nil => println!("(nil)"),
+                    SerType::Err { code, message } => println!("(err) {} {}", code, message),
+                    SerType::Str(value) => println!("(str) {}", value),
+                    SerType::Int(value) => println!("(int) {}", value),
+                    SerType::Arr(_) => println!("(arr)"),
+                }
+            }
+            println!("(arr) end")
+        } /*
+          SerType::Arr(value) => println!("(arr) len={}\n{:?}", value.len() / 6, value),
+          [2, 1, 0, 0, 0, 97,
+           2, 1, 0, 0, 0, 98,
+           2, 1, 0, 0, 0, 107]
+           */
     }
     Ok(())
 }
