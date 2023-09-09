@@ -616,7 +616,7 @@ int main()
                 {
                     // client closed normally, or something bad happened.
                     // destroy this connection
-                    fd2conn[conn->fd] = NULL;
+                    fd2conn[conn->fd] = nullptr;
                     (void)close(conn->fd);
                     free(conn);
                 }
