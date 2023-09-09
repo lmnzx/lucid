@@ -1,6 +1,1 @@
-server
-server.*
-!client.cpp
-!server.cpp
-.DS_STORE
-target
+build
