@@ -1,44 +1,22 @@
 #include <assert.h>
+#include <math.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
-#include <unistd.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <poll.h>
+#include <unistd.h>
+#include <arpa/inet.h>
 #include <sys/socket.h>
 #include <netinet/ip.h>
-#include <arpa/inet.h>
-#include <vector>
-#include <map>
 #include <string>
+#include <vector>
 
 #include "common.h"
 #include "hashtable.h"
 #include "zset.h"
-
-const size_t k_max_msg = 4096;
-
-enum
-{
-    STATE_REQ = 0,
-    STATE_RES = 1,
-    STATE_END = 2, // end of connection
-};
-
-struct Conn
-{
-    int fd = -1;
-    uint32_t state = 0; // STATE_REQ or STATE_RES
-    // buffer for reading
-    size_t rbuf_size = 0;
-    uint8_t rbuf[4 + k_max_msg];
-    // buffer for writing
-    size_t wbuf_size = 0;
-    size_t wbuf_sent = 0;
-    uint8_t wbuf[4 + k_max_msg];
-};
 
 static void msg(const char *msg)
 {
@@ -52,68 +30,89 @@ static void die(const char *msg)
     abort();
 }
 
-static bool try_flush_buffer(Conn *conn)
+static void fd_set_nb(int fd)
 {
-    ssize_t rv = 0;
-    do
+    errno = 0;
+    int flags = fcntl(fd, F_GETFL, 0);
+    if (errno)
     {
-        size_t remain = conn->wbuf_size - conn->wbuf_sent;
-        rv = write(conn->fd, &conn->wbuf[conn->wbuf_sent], remain);
-    } while (rv < 0 && errno == EINTR);
-    if (rv < 0 && errno == EAGAIN)
-    {
-        // got EAGAIN, stop.
-        return false;
+        die("fcntl error");
+        return;
     }
-    if (rv < 0)
-    {
-        msg("write() error");
-        conn->state = STATE_END;
-        return false;
-    }
-    conn->wbuf_sent += (size_t)rv;
-    assert(conn->wbuf_sent <= conn->wbuf_size);
-    if (conn->wbuf_sent == conn->wbuf_size)
-    {
-        // response was fully sent, change state back
-        conn->state = STATE_REQ;
-        conn->wbuf_sent = 0;
-        conn->wbuf_size = 0;
-        return false;
-    }
-    // still got some data in wbuf, could try to write again
-    return true;
-}
 
-static void state_res(Conn *conn)
-{
-    while (try_flush_buffer(conn))
+    flags |= O_NONBLOCK;
+
+    errno = 0;
+    (void)fcntl(fd, F_SETFL, flags);
+    if (errno)
     {
+        die("fcntl error");
     }
 }
 
-//* redis functionality
-// data structure for the key space
-static struct
-{
-    HMap db;
-} g_data;
+const size_t k_max_msg = 4096;
 
 enum
 {
-    T_STR = 0,
-    T_ZSET = 1,
+    STATE_REQ = 0,
+    STATE_RES = 1,
+    STATE_END = 2, // mark the connection for deletion
 };
 
-// the stucture for the key
-struct Entry
+struct Conn
 {
-    struct HNode node;
-    std::string key;
-    std::string val;
-    uint32_t type = 0;
-    ZSet *zset = nullptr;
+    int fd = -1;
+    uint32_t state = 0; // either STATE_REQ or STATE_RES
+    // buffer for reading
+    size_t rbuf_size = 0;
+    uint8_t rbuf[4 + k_max_msg];
+    // buffer for writing
+    size_t wbuf_size = 0;
+    size_t wbuf_sent = 0;
+    uint8_t wbuf[4 + k_max_msg];
 };
+
+static void conn_put(std::vector<Conn *> &fd2conn, struct Conn *conn)
+{
+    if (fd2conn.size() <= (size_t)conn->fd)
+    {
+        fd2conn.resize(conn->fd + 1);
+    }
+    fd2conn[conn->fd] = conn;
+}
+
+static int32_t accept_new_conn(std::vector<Conn *> &fd2conn, int fd)
+{
+    // accept
+    struct sockaddr_in client_addr = {};
+    socklen_t socklen = sizeof(client_addr);
+    int connfd = accept(fd, (struct sockaddr *)&client_addr, &socklen);
+    if (connfd < 0)
+    {
+        msg("accept() error");
+        return -1; // error
+    }
+
+    // set the new connection fd to nonblocking mode
+    fd_set_nb(connfd);
+    // creating the struct Conn
+    struct Conn *conn = (struct Conn *)malloc(sizeof(struct Conn));
+    if (!conn)
+    {
+        close(connfd);
+        return -1;
+    }
+    conn->fd = connfd;
+    conn->state = STATE_REQ;
+    conn->rbuf_size = 0;
+    conn->wbuf_size = 0;
+    conn->wbuf_sent = 0;
+    conn_put(fd2conn, conn);
+    return 0;
+}
+
+static void state_req(Conn *conn);
+static void state_res(Conn *conn);
 
 const size_t k_max_args = 1024;
 
@@ -155,25 +154,35 @@ static int32_t parse_req(
     return 0;
 }
 
+// The data structure for the key space.
+static struct
+{
+    HMap db;
+} g_data;
+
+enum
+{
+    T_STR = 0,
+    T_ZSET = 1,
+};
+
+// the structure for the key
+struct Entry
+{
+    struct HNode node;
+    std::string key;
+    std::string val;
+    uint32_t type = 0;
+    ZSet *zset = nullptr;
+};
+
 static bool entry_eq(HNode *lhs, HNode *rhs)
 {
-    struct Entry *le = container_of(lhs, struct Entry, node); // lhs entry
-    struct Entry *re = container_of(rhs, struct Entry, node); // rhs entry
-    // compare the key and hash code of the two entries
+    struct Entry *le = container_of(lhs, struct Entry, node);
+    struct Entry *re = container_of(rhs, struct Entry, node);
     return lhs->hcode == rhs->hcode && le->key == re->key;
 }
 
-// static uint64_t str_hash(const uint8_t *data, size_t len)
-// {
-//     uint64_t h = 0x811C9DC5; // FNV1A hash
-//     for (size_t i = 0; i < len; i++)
-//     {
-//         h = h * 31 + data[i];
-//     }
-//     return h;
-// }
-
-//* data serialization
 enum
 {
     ERR_UNKNOWN = 1,
@@ -184,12 +193,12 @@ enum
 
 enum
 {
-    SER_NIL = 0, // NULL
-    SER_ERR = 1, // an error code and message
-    SER_STR = 2, // a string
-    SER_INT = 3, // a int64
-    SER_DBL = 4, // a double
-    SER_ARR = 5, // array
+    SER_NIL = 0,
+    SER_ERR = 1,
+    SER_STR = 2,
+    SER_INT = 3,
+    SER_DBL = 4,
+    SER_ARR = 5,
 };
 
 static void out_nil(std::string &out)
@@ -322,8 +331,7 @@ static void h_scan(HTab *tab, void (*f)(HNode *, void *), void *arg)
     {
         return;
     }
-
-    for (size_t i = 0; i < tab->mask + 1; i++)
+    for (size_t i = 0; i < tab->mask + 1; ++i)
     {
         HNode *node = tab->tab[i];
         while (node)
@@ -348,7 +356,6 @@ static void do_keys(std::vector<std::string> &cmd, std::string &out)
     h_scan(&g_data.db.ht2, &cb_scan, &out);
 }
 
-// sorted-sets implementation
 static bool str2dbl(const std::string &s, double &out)
 {
     char *endp = nullptr;
@@ -358,7 +365,7 @@ static bool str2dbl(const std::string &s, double &out)
 
 static bool str2int(const std::string &s, int64_t &out)
 {
-    char *endp = nullptr;
+    char *endp = NULL;
     out = strtoll(s.c_str(), &endp, 10);
     return endp == s.c_str() + s.size();
 }
@@ -578,16 +585,16 @@ static bool try_one_request(Conn *conn)
         return false;
     }
 
-    // parsing the request
+    // parse the request
     std::vector<std::string> cmd;
     if (0 != parse_req(&conn->rbuf[4], len, cmd))
     {
-        msg("bad request");
+        msg("bad req");
         conn->state = STATE_END;
         return false;
     }
 
-    // got one request generate the response
+    // got one request, generate the response.
     std::string out;
     do_request(cmd, out);
 
@@ -595,9 +602,8 @@ static bool try_one_request(Conn *conn)
     if (4 + out.size() > k_max_msg)
     {
         out.clear();
-        out_err(out, ERR_2BIG, "response too big");
+        out_err(out, ERR_2BIG, "response is too big");
     }
-
     uint32_t wlen = (uint32_t)out.size();
     memcpy(&conn->wbuf[0], &wlen, 4);
     memcpy(&conn->wbuf[4], out.data(), out.size());
@@ -628,7 +634,7 @@ static bool try_fill_buffer(Conn *conn)
     ssize_t rv = 0;
     do
     {
-        size_t cap = sizeof(conn->rbuf) - conn->rbuf_size; // remaining capacity
+        size_t cap = sizeof(conn->rbuf) - conn->rbuf_size;
         rv = read(conn->fd, &conn->rbuf[conn->rbuf_size], cap);
     } while (rv < 0 && errno == EINTR);
     if (rv < 0 && errno == EAGAIN)
@@ -648,10 +654,6 @@ static bool try_fill_buffer(Conn *conn)
         {
             msg("unexpected EOF");
         }
-        // else
-        // {
-        //     msg("EOF");
-        // }
         conn->state = STATE_END;
         return false;
     }
@@ -673,63 +675,44 @@ static void state_req(Conn *conn)
     }
 }
 
-static void fd_set_nb(int fd)
+static bool try_flush_buffer(Conn *conn)
 {
-    errno = 0;
-    int flags = fcntl(fd, F_GETFL, 0);
-    if (errno)
+    ssize_t rv = 0;
+    do
     {
-        die("fcntl error");
-        return;
-    }
-
-    flags |= O_NONBLOCK;
-
-    errno = 0;
-    (void)fcntl(fd, F_SETFL, flags);
-    if (errno)
+        size_t remain = conn->wbuf_size - conn->wbuf_sent;
+        rv = write(conn->fd, &conn->wbuf[conn->wbuf_sent], remain);
+    } while (rv < 0 && errno == EINTR);
+    if (rv < 0 && errno == EAGAIN)
     {
-        die("fcntl error");
+        // got EAGAIN, stop.
+        return false;
     }
+    if (rv < 0)
+    {
+        msg("write() error");
+        conn->state = STATE_END;
+        return false;
+    }
+    conn->wbuf_sent += (size_t)rv;
+    assert(conn->wbuf_sent <= conn->wbuf_size);
+    if (conn->wbuf_sent == conn->wbuf_size)
+    {
+        // response was fully sent, change state back
+        conn->state = STATE_REQ;
+        conn->wbuf_sent = 0;
+        conn->wbuf_size = 0;
+        return false;
+    }
+    // still got some data in wbuf, could try to write again
+    return true;
 }
 
-static void conn_put(std::vector<Conn *> &fd2conn, struct Conn *conn)
+static void state_res(Conn *conn)
 {
-    if (fd2conn.size() <= (size_t)conn->fd)
+    while (try_flush_buffer(conn))
     {
-        fd2conn.resize(conn->fd + 1);
     }
-    fd2conn[conn->fd] = conn;
-}
-
-static int32_t accept_new_conn(std::vector<Conn *> &fd2conn, int fd)
-{
-    // accept
-    struct sockaddr_in client_addr = {};
-    socklen_t socklen = sizeof(client_addr);
-    int connfd = accept(fd, (struct sockaddr *)&client_addr, &socklen);
-    if (connfd < 0)
-    {
-        msg("accept() error");
-        return -1; // error
-    }
-
-    // set the new connection fd to nonblocking mode
-    fd_set_nb(connfd);
-    // creating the struct Conn
-    struct Conn *conn = (struct Conn *)malloc(sizeof(struct Conn));
-    if (!conn)
-    {
-        close(connfd);
-        return -1;
-    }
-    conn->fd = connfd;
-    conn->state = STATE_REQ;
-    conn->rbuf_size = 0;
-    conn->wbuf_size = 0;
-    conn->wbuf_sent = 0;
-    conn_put(fd2conn, conn);
-    return 0;
 }
 
 static void connection_io(Conn *conn)
@@ -756,47 +739,42 @@ int main()
         die("socket()");
     }
 
-    // optval is 1, so we can reuse the port immediately after the server exits.
-    int optval = 1;
-    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &optval, sizeof(optval));
+    int val = 1;
+    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &val, sizeof(val));
 
-    // bind to port 1234
+    // bind
     struct sockaddr_in addr = {};
     addr.sin_family = AF_INET;
     addr.sin_port = ntohs(1234);
-    addr.sin_addr.s_addr = ntohl(0); // wildcard address
-
-    int rv = bind(fd, (struct sockaddr *)&addr, sizeof(addr));
-
+    addr.sin_addr.s_addr = ntohl(0); // wildcard address 0.0.0.0
+    int rv = bind(fd, (const sockaddr *)&addr, sizeof(addr));
     if (rv)
     {
-        die("bind() error");
+        die("bind()");
     }
 
-    // listen for incoming connections
+    // listen
     rv = listen(fd, SOMAXCONN);
     if (rv)
     {
-        die("listen() error");
+        die("listen()");
     }
 
     // a map of all client connections, keyed by fd
     std::vector<Conn *> fd2conn;
 
-    // set the listen fd to non-blocking mode
+    // set the listen fd to nonblocking mode
     fd_set_nb(fd);
 
-    // event loop
+    // the event loop
     std::vector<struct pollfd> poll_args;
-
     while (true)
     {
-        // prepare the arguments for poll()
+        // prepare the arguments of the poll()
         poll_args.clear();
-        // for convenience, we put the listen fd at the first position
+        // for convenience, the listening fd is put in the first position
         struct pollfd pfd = {fd, POLLIN, 0};
         poll_args.push_back(pfd);
-
         // connection fds
         for (Conn *conn : fd2conn)
         {
@@ -804,7 +782,6 @@ int main()
             {
                 continue;
             }
-
             struct pollfd pfd = {};
             pfd.fd = conn->fd;
             pfd.events = (conn->state == STATE_REQ) ? POLLIN : POLLOUT;
@@ -813,15 +790,15 @@ int main()
         }
 
         // poll for active fds
-        // timeout is 1 second
+        // the timeout argument doesn't matter here
         int rv = poll(poll_args.data(), (nfds_t)poll_args.size(), 1000);
         if (rv < 0)
         {
-            die("poll() error");
+            die("poll");
         }
 
         // process active connections
-        for (size_t i = 1; i < poll_args.size(); i++)
+        for (size_t i = 1; i < poll_args.size(); ++i)
         {
             if (poll_args[i].revents)
             {
@@ -844,5 +821,6 @@ int main()
             (void)accept_new_conn(fd2conn, fd);
         }
     }
+
     return 0;
 }
