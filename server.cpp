@@ -216,10 +216,10 @@ static void out_int(std::string &out, int64_t val)
     out.append((char *)&val, 8);
 }
 
-static void out_arr(std::string &out, uint32_t n)
+static void out_dbl(std::string &out, double val)
 {
-    out.push_back(SER_ARR);
-    out.append((char *)&n, 4);
+    out.push_back(SER_DBL);
+    out.append((char *)&val, 8);
 }
 
 static void out_err(std::string &out, int32_t code, const std::string &msg)
@@ -230,10 +230,11 @@ static void out_err(std::string &out, int32_t code, const std::string &msg)
     out.append((char *)&len, 4);
     out.append(msg);
 }
-static void out_dbl(std::string &out, int32_t val)
+
+static void out_arr(std::string &out, uint32_t n)
 {
-    out.push_back(SER_DBL);
-    out.append((char *)&val, 8);
+    out.push_back(SER_ARR);
+    out.append((char *)&n, 4);
 }
 
 static void out_update_arr(std::string &out, uint32_t n)
@@ -248,20 +249,17 @@ static void do_get(std::vector<std::string> &cmd, std::string &out)
     key.key.swap(cmd[1]);
     key.node.hcode = str_hash((uint8_t *)key.key.data(), key.key.size());
 
-    HNode *node = hm_lookup(&g_data.db, &key.node, entry_eq);
+    HNode *node = hm_lookup(&g_data.db, &key.node, &entry_eq);
     if (!node)
     {
         return out_nil(out);
     }
 
-    // const std::string &val = container_of(node, Entry, node)->val;
-    // out_str(out, val);
     Entry *ent = container_of(node, Entry, node);
     if (ent->type != T_STR)
     {
-        return out_err(out, ERR_TYPE, "expected string type");
+        return out_err(out, ERR_TYPE, "expect string type");
     }
-
     return out_str(out, ent->val);
 }
 
@@ -274,11 +272,10 @@ static void do_set(std::vector<std::string> &cmd, std::string &out)
     HNode *node = hm_lookup(&g_data.db, &key.node, &entry_eq);
     if (node)
     {
-        // container_of(node, Entry, node)->val.swap(cmd[2]);
         Entry *ent = container_of(node, Entry, node);
         if (ent->type != T_STR)
         {
-            return out_err(out, ERR_TYPE, "expected string type");
+            return out_err(out, ERR_TYPE, "expect string type");
         }
         ent->val.swap(cmd[2]);
     }
@@ -356,7 +353,7 @@ static bool str2dbl(const std::string &s, double &out)
 {
     char *endp = nullptr;
     out = strtod(s.c_str(), &endp);
-    return endp == s.c_str() + s.size();
+    return endp == s.c_str() + s.size() && !isnan(out);
 }
 
 static bool str2int(const std::string &s, int64_t &out)
@@ -372,7 +369,7 @@ static void do_zadd(std::vector<std::string> &cmd, std::string &out)
     double score = 0;
     if (!str2dbl(cmd[2], score))
     {
-        return out_err(out, ERR_ARG, "expected fp number");
+        return out_err(out, ERR_ARG, "expect fp number");
     }
 
     // look up or create the zset
@@ -396,7 +393,7 @@ static void do_zadd(std::vector<std::string> &cmd, std::string &out)
         ent = container_of(hnode, Entry, node);
         if (ent->type != T_ZSET)
         {
-            return out_err(out, ERR_TYPE, "expected zset");
+            return out_err(out, ERR_TYPE, "expect zset");
         }
     }
 
@@ -421,7 +418,7 @@ static bool expect_zset(std::string &out, std::string &s, Entry **ent)
     *ent = container_of(hnode, Entry, node);
     if ((*ent)->type != T_ZSET)
     {
-        out_err(out, ERR_TYPE, "expected zset");
+        out_err(out, ERR_TYPE, "expect zset");
         return false;
     }
     return true;
@@ -442,7 +439,6 @@ static void do_zrem(std::vector<std::string> &cmd, std::string &out)
     {
         znode_del(znode);
     }
-
     return out_int(out, znode ? 1 : 0);
 }
 
@@ -467,19 +463,18 @@ static void do_zquery(std::vector<std::string> &cmd, std::string &out)
     double score = 0;
     if (!str2dbl(cmd[2], score))
     {
-        return out_err(out, ERR_ARG, "expected fp number");
+        return out_err(out, ERR_ARG, "expect fp number");
     }
-
     const std::string &name = cmd[3];
     int64_t offset = 0;
     int64_t limit = 0;
     if (!str2int(cmd[4], offset))
     {
-        return out_err(out, ERR_ARG, "expected int");
+        return out_err(out, ERR_ARG, "expect int");
     }
-    if (!str2int(cmd[5], offset))
+    if (!str2int(cmd[5], limit))
     {
-        return out_err(out, ERR_ARG, "expected int");
+        return out_err(out, ERR_ARG, "expect int");
     }
 
     // get the zset
@@ -499,11 +494,11 @@ static void do_zquery(std::vector<std::string> &cmd, std::string &out)
     {
         return out_arr(out, 0);
     }
+    ZNode *znode = zset_query(
+        ent->zset, score, name.data(), name.size(), offset);
 
-    ZNode *znode = zset_query(ent->zset, score, name.data(), name.size(), offset);
-
-    // pack the response
-    out_arr(out, 0);
+    // output
+    out_arr(out, 0); // the array length will be updated later
     uint32_t n = 0;
     while (znode && (int64_t)n < limit)
     {
@@ -653,10 +648,10 @@ static bool try_fill_buffer(Conn *conn)
         {
             msg("unexpected EOF");
         }
-        else
-        {
-            msg("EOF");
-        }
+        // else
+        // {
+        //     msg("EOF");
+        // }
         conn->state = STATE_END;
         return false;
     }

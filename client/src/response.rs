@@ -10,7 +10,7 @@ pub fn on_response(data: &[u8]) -> Result<SerType, &'static str> {
         1 => parse_err_response(data),
         2 => parse_str_response(data),
         3 => parse_int_response(data),
-        4 => parse_float_response(data),
+        // 4 => parse_float_response(data),
         5 => parse_arr_response(data),
         _ => Err("bad response"),
     }
@@ -52,14 +52,14 @@ fn parse_int_response(data: &[u8]) -> Result<SerType, &'static str> {
     Ok(SerType::Int(val))
 }
 
-fn parse_float_response(data: &[u8]) -> Result<SerType, &'static str> {
-    if data.len() < 1 + 8 {
-        return Err("bad response");
-    }
+// fn parse_float_response(data: &[u8]) -> Result<SerType, &'static str> {
+//     if data.len() < 1 + 8 {
+//         return Err("bad response");
+//     }
 
-    let val = f64::from_le_bytes(data[1..9].try_into().unwrap());
-    Ok(SerType::Float(val))
-}
+//     let val = f64::from_le_bytes(data[1..9].try_into().unwrap());
+//     Ok(SerType::Float(val))
+// }
 
 fn parse_arr_response(data: &[u8]) -> Result<SerType, &'static str> {
     if data.len() < 1 + 4 {
@@ -98,11 +98,11 @@ fn parse_arr_response(data: &[u8]) -> Result<SerType, &'static str> {
                         arr.extend_from_slice(&value.to_le_bytes());
                         (1 + 8, 1)
                     }
-                    SerType::Float(value) => {
-                        arr.extend_from_slice(&[4]);
-                        arr.extend_from_slice(&value.to_le_bytes());
-                        (1 + 8, 1)
-                    }
+                    // SerType::Float(value) => {
+                    //     arr.extend_from_slice(&[4]);
+                    //     arr.extend_from_slice(&value.to_le_bytes());
+                    //     (1 + 8, 1)
+                    // }
                     SerType::Arr(value) => {
                         arr.extend_from_slice(&[4]);
                         arr.extend_from_slice(&value);
