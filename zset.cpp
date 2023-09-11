@@ -26,17 +26,17 @@ static uint32_t min(size_t lhs, size_t rhs)
 // compare by the (score, name) tuple
 static bool zless(AVLNode *lhs, double score, const char *name, size_t len)
 {
-  ZNode *z1 = container_of(lhs, ZNode, tree);
-  if (z1->score != score)
+  ZNode *zl = container_of(lhs, ZNode, tree);
+  if (zl->score != score)
   {
-    return z1->score < score;
+    return zl->score < score;
   }
-  int rv = memcmp(z1->name, name, min(z1->len, len));
+  int rv = memcmp(zl->name, name, min(zl->len, len));
   if (rv != 0)
   {
     return rv < 0;
   }
-  return z1->len < len;
+  return zl->len < len;
 }
 
 static bool zless(AVLNode *lhs, AVLNode *rhs)
@@ -57,7 +57,7 @@ static void tree_add(ZSet *zset, ZNode *node)
   AVLNode *cur = zset->tree;
   while (true)
   {
-    AVLNode **from = zless(&node->tree, cur) ? &cur->right : &cur->left;
+    AVLNode **from = zless(&node->tree, cur) ? &cur->left : &cur->right;
     if (!*from)
     {
       *from = &node->tree;
@@ -76,14 +76,13 @@ static void zset_update(ZSet *zset, ZNode *node, double score)
   {
     return;
   }
-
   zset->tree = avl_del(&node->tree);
   node->score = score;
   avl_init(&node->tree);
   tree_add(zset, node);
 }
 
-// add a new (score, name) tuple, or update the score of an existing node
+// add a new (score, name) tuple, or update the score of the existing tuple
 bool zset_add(ZSet *zset, const char *name, size_t len, double score)
 {
   ZNode *node = zset_lookup(zset, name, len);
@@ -101,7 +100,7 @@ bool zset_add(ZSet *zset, const char *name, size_t len, double score)
   }
 }
 
-// a helper struct for the hashtable lookup
+// a helper structure for the hashtable lookup
 struct HKey
 {
   HNode node;
@@ -122,8 +121,7 @@ static bool hcmp(HNode *node, HNode *key)
   {
     return false;
   }
-
-  return 0 == memcmp(znode->name, hkey->name, hkey->len);
+  return 0 == memcmp(znode->name, hkey->name, znode->len);
 }
 
 // lookup by name
@@ -138,7 +136,7 @@ ZNode *zset_lookup(ZSet *zset, const char *name, size_t len)
   key.node.hcode = str_hash((uint8_t *)name, len);
   key.name = name;
   key.len = len;
-  HNode *found = hm_lookup(&zset->hmap, &key.node, hcmp);
+  HNode *found = hm_lookup(&zset->hmap, &key.node, &hcmp);
   if (!found)
   {
     return nullptr;
@@ -159,7 +157,7 @@ ZNode *zset_pop(ZSet *zset, const char *name, size_t len)
   key.node.hcode = str_hash((uint8_t *)name, len);
   key.name = name;
   key.len = len;
-  HNode *found = hm_lookup(&zset->hmap, &key.node, hcmp);
+  HNode *found = hm_pop(&zset->hmap, &key.node, &hcmp);
   if (!found)
   {
     return nullptr;
@@ -170,8 +168,8 @@ ZNode *zset_pop(ZSet *zset, const char *name, size_t len)
   return node;
 }
 
-// find the (score, name) tuple that is greater or equal to the argument
-// then offset relative to it
+// find the (score, name) tuple that is greater or equal to the argument,
+// then offset relative to it.
 ZNode *zset_query(ZSet *zset, double score, const char *name, size_t len, int64_t offset)
 {
   AVLNode *found = nullptr;
@@ -189,7 +187,7 @@ ZNode *zset_query(ZSet *zset, double score, const char *name, size_t len, int64_
     }
   }
 
-  if (!found)
+  if (found)
   {
     found = avl_offset(found, offset);
   }
@@ -218,5 +216,5 @@ static void tree_dispose(AVLNode *node)
 void zset_dispose(ZSet *zset)
 {
   tree_dispose(zset->tree);
-  hm_destory(&zset->hmap);
+  hm_destroy(&zset->hmap);
 }
