@@ -4,3 +4,4 @@ server.*
 !server.cpp
 .DS_STORE
 target
+build

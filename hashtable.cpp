@@ -1,5 +1,6 @@
 #include <assert.h>
 #include <stdlib.h>
+
 #include "hashtable.h"
 
 // n must be a power of 2
