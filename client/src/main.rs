@@ -56,6 +56,7 @@ fn read_res(fd: &mut TcpStream) -> io::Result<()> {
         SerType::Err { code, message } => println!("(err) {} {}", code, message),
         SerType::Str(value) => println!("(str) {}", value),
         SerType::Int(value) => println!("(int) {}", value),
+        SerType::Float(value) => println!("(float) {}", value),
         SerType::Arr(value) => {
             println!("(arr) len={}", value.len() / 6);
             for chunk in value.chunks_exact(6) {
@@ -65,6 +66,7 @@ fn read_res(fd: &mut TcpStream) -> io::Result<()> {
                     SerType::Err { code, message } => println!("(err) {} {}", code, message),
                     SerType::Str(value) => println!("(str) {}", value),
                     SerType::Int(value) => println!("(int) {}", value),
+                    SerType::Float(value) => println!("(float) {}", value),
                     SerType::Arr(_) => println!("(arr)"),
                 }
             }
