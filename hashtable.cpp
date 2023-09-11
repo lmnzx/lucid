@@ -49,7 +49,7 @@ static HNode *h_detach(HTab *htab, HNode **from)
 {
   HNode *node = *from;
   *from = node->next;
-  node->next = nullptr;
+  // node->next = nullptr;
   htab->size--;
   return node;
 }
