@@ -17,7 +17,7 @@ struct Data
 
 struct Container
 {
-  AVLNode *root = NULL;
+  AVLNode *root = nullptr;
 };
 
 static void add(Container &c, uint32_t val)
@@ -117,7 +117,7 @@ static void extract(AVLNode *node, std::multiset<uint32_t> &extracted)
 static void container_verify(
     Container &c, const std::multiset<uint32_t> &ref)
 {
-  avl_verify(NULL, c.root);
+  avl_verify(nullptr, c.root);
   assert(avl_cnt(c.root) == ref.size());
   std::multiset<uint32_t> extracted;
   extract(c.root, extracted);

@@ -4,14 +4,14 @@
 // hashtable node, should be embedded into the payload
 struct HNode
 {
-  HNode *next = NULL;
+  HNode *next = nullptr;
   uint64_t hcode = 0;
 };
 
 // a simple fixed-sized hashtable
 struct HTab
 {
-  HNode **tab = NULL;
+  HNode **tab = nullptr;
   size_t mask = 0;
   size_t size = 0;
 };

@@ -99,7 +99,7 @@ static AVLNode *avl_fix(AVLNode *node)
     avl_update(node);
     uint32_t l = avl_depth(node->left);
     uint32_t r = avl_depth(node->right);
-    AVLNode **from = NULL;
+    AVLNode **from = nullptr;
     if (node->parent)
     {
       from = (node->parent->left == node)
@@ -126,7 +126,7 @@ static AVLNode *avl_fix(AVLNode *node)
 // detach a node and returns the new root of the tree
 static AVLNode *avl_del(AVLNode *node)
 {
-  if (node->right == NULL)
+  if (node->right == nullptr)
   {
     // no right subtree, replace the node with the left subtree
     // link the left subtree to the parent

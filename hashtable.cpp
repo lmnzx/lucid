@@ -28,7 +28,7 @@ static HNode **h_lookup(
 {
   if (!htab->tab)
   {
-    return NULL;
+    return nullptr;
   }
 
   size_t pos = key->hcode & htab->mask;
@@ -41,7 +41,7 @@ static HNode **h_lookup(
     }
     from = &(*from)->next;
   }
-  return NULL;
+  return nullptr;
 }
 
 // remove a node from the chain
@@ -49,7 +49,7 @@ static HNode *h_detach(HTab *htab, HNode **from)
 {
   HNode *node = *from;
   *from = node->next;
-  node->next = NULL;
+  node->next = nullptr;
   htab->size--;
   return node;
 }
@@ -58,7 +58,7 @@ const size_t k_resizing_work = 128; // 2^7
 
 static void hm_help_resizing(HMap *hmap)
 {
-  if (hmap->ht2.tab == NULL)
+  if (hmap->ht2.tab == nullptr)
   {
     return;
   }
@@ -82,13 +82,13 @@ static void hm_help_resizing(HMap *hmap)
   {
     // done
     free(hmap->ht2.tab);
-    hmap->ht2.tab = NULL;
+    hmap->ht2.tab = nullptr;
   }
 }
 
 static void hm_start_resizing(HMap *hmap)
 {
-  assert(hmap->ht2.tab == NULL);
+  assert(hmap->ht2.tab == nullptr);
 
   // create a bigger hashtable and swap them
   hmap->ht2 = hmap->ht1;
@@ -106,7 +106,7 @@ HNode *hm_lookup(
     from = h_lookup(&hmap->ht2, key, cmp);
   }
 
-  return from ? *from : NULL;
+  return from ? *from : nullptr;
 }
 
 const size_t k_max_load_factor = 8;
@@ -149,7 +149,7 @@ HNode *hm_pop(
     return h_detach(&hmap->ht2, from);
   }
 
-  return NULL; // not found
+  return nullptr; // not found
 }
 
 size_t hm_size(HMap *hmap)
