@@ -16,6 +16,7 @@
 
 #include "common.h"
 #include "hashtable.h"
+#include "heap.h"
 #include "list.h"
 #include "zset.h"
 
@@ -91,6 +92,8 @@ static struct
     std::vector<Conn *> fd2conn;
     // timers for idle connections
     DList idle_list;
+    // timers for TTLs
+    std::vector<HeapItem> heap;
 } g_data;
 
 static void conn_put(std::vector<Conn *> &fd2conn, struct Conn *conn)
@@ -191,6 +194,8 @@ struct Entry
     std::string val;
     uint32_t type = 0;
     ZSet *zset = nullptr;
+    // for TTLs
+    size_t heap_idx = -1;
 };
 
 static bool entry_eq(HNode *lhs, HNode *rhs)
@@ -316,6 +321,38 @@ static void do_set(std::vector<std::string> &cmd, std::string &out)
     return out_nil(out);
 }
 
+// set or remove the TTL
+static void entry_set_ttl(Entry *ent, int64_t ttl_ms)
+{
+    if (ttl_ms < 0 && ent->heap_idx != (size_t)-1)
+    {
+        // erase an item from the heap
+        // by replacing it with the last item in the array.
+        size_t pos = ent->heap_idx;
+        g_data.heap[pos] = g_data.heap.back();
+        g_data.heap.pop_back();
+        if (pos < g_data.heap.size())
+        {
+            heap_update(g_data.heap.data(), pos, g_data.heap.size());
+        }
+        ent->heap_idx = -1;
+    }
+    else if (ttl_ms >= 0)
+    {
+        size_t pos = ent->heap_idx;
+        if (pos == (size_t)-1)
+        {
+            // add an new item to the heap
+            HeapItem item;
+            item.ref = &ent->heap_idx;
+            g_data.heap.push_back(item);
+            pos = g_data.heap.size() - 1;
+        }
+        g_data.heap[pos].val = get_monotonic_usec() + (uint64_t)ttl_ms * 1000;
+        heap_update(g_data.heap.data(), pos, g_data.heap.size());
+    }
+}
+
 static void entry_del(Entry *ent)
 {
     switch (ent->type)
@@ -325,6 +362,7 @@ static void entry_del(Entry *ent)
         delete ent->zset;
         break;
     }
+    entry_set_ttl(ent, -1);
     delete ent;
 }
 
@@ -340,6 +378,64 @@ static void do_del(std::vector<std::string> &cmd, std::string &out)
         entry_del(container_of(node, Entry, node));
     }
     return out_int(out, node ? 1 : 0);
+}
+
+static bool str2int(const std::string &s, int64_t &out)
+{
+    char *endp = nullptr;
+    out = strtoll(s.c_str(), &endp, 10);
+    return endp == s.c_str() + s.size();
+}
+
+static bool str2dbl(const std::string &s, double &out)
+{
+    char *endp = nullptr;
+    out = strtod(s.c_str(), &endp);
+    return endp == s.c_str() + s.size() && !isnan(out);
+}
+
+static void do_expire(std::vector<std::string> &cmd, std::string &out)
+{
+    int64_t ttl_ms = 0;
+    if (!str2int(cmd[2], ttl_ms))
+    {
+        return out_err(out, ERR_ARG, "expect int64");
+    }
+
+    Entry key;
+    key.key.swap(cmd[1]);
+    key.node.hcode = str_hash((uint8_t *)key.key.data(), key.key.size());
+
+    HNode *node = hm_lookup(&g_data.db, &key.node, &entry_eq);
+    if (node)
+    {
+        Entry *ent = container_of(node, Entry, node);
+        entry_set_ttl(ent, ttl_ms);
+    }
+    return out_int(out, node ? 1 : 0);
+}
+
+static void do_ttl(std::vector<std::string> &cmd, std::string &out)
+{
+    Entry key;
+    key.key.swap(cmd[1]);
+    key.node.hcode = str_hash((uint8_t *)key.key.data(), key.key.size());
+
+    HNode *node = hm_lookup(&g_data.db, &key.node, &entry_eq);
+    if (!node)
+    {
+        return out_int(out, -2);
+    }
+
+    Entry *ent = container_of(node, Entry, node);
+    if (ent->heap_idx == (size_t)-1)
+    {
+        return out_int(out, -1);
+    }
+
+    uint64_t expire_at = g_data.heap[ent->heap_idx].val;
+    uint64_t now_us = get_monotonic_usec();
+    return out_int(out, expire_at > now_us ? (expire_at - now_us) / 1000 : 0);
 }
 
 static void h_scan(HTab *tab, void (*f)(HNode *, void *), void *arg)
@@ -371,20 +467,6 @@ static void do_keys(std::vector<std::string> &cmd, std::string &out)
     out_arr(out, (uint32_t)hm_size(&g_data.db));
     h_scan(&g_data.db.ht1, &cb_scan, &out);
     h_scan(&g_data.db.ht2, &cb_scan, &out);
-}
-
-static bool str2dbl(const std::string &s, double &out)
-{
-    char *endp = nullptr;
-    out = strtod(s.c_str(), &endp);
-    return endp == s.c_str() + s.size() && !isnan(out);
-}
-
-static bool str2int(const std::string &s, int64_t &out)
-{
-    char *endp = NULL;
-    out = strtoll(s.c_str(), &endp, 10);
-    return endp == s.c_str() + s.size();
 }
 
 // zadd zset score name
@@ -556,6 +638,14 @@ static void do_request(std::vector<std::string> &cmd, std::string &out)
     else if (cmd.size() == 2 && cmd_is(cmd[0], "del"))
     {
         do_del(cmd, out);
+    }
+    else if (cmd.size() == 3 && cmd_is(cmd[0], "pexpire"))
+    {
+        do_expire(cmd, out);
+    }
+    else if (cmd.size() == 2 && cmd_is(cmd[0], "pttl"))
+    {
+        do_ttl(cmd, out);
     }
     else if (cmd.size() == 4 && cmd_is(cmd[0], "zadd"))
     {
@@ -758,20 +848,33 @@ const uint64_t k_idle_timeout_ms = 5 * 1000; // 5 seconds
 
 static uint32_t next_timer_ms()
 {
-    if (dlist_empty(&g_data.idle_list))
+    uint64_t now_us = get_monotonic_usec();
+    uint64_t next_us = (uint64_t)-1;
+
+    // idle timers
+    if (!dlist_empty(&g_data.idle_list))
     {
-        return 10000; // no timer
+        Conn *next = container_of(g_data.idle_list.next, Conn, idle_list);
+        next_us = next->idle_start + k_idle_timeout_ms * 1000;
     }
 
-    uint64_t now = get_monotonic_usec();
-    Conn *next = container_of(g_data.idle_list.next, Conn, idle_list);
-    uint64_t elapsed = next->idle_start + k_idle_timeout_ms * 1000;
-    if (elapsed <= now)
+    // ttl timers
+    if (!g_data.heap.empty() && g_data.heap[0].val < next_us)
     {
-        return 0; // timer expired
+        next_us = g_data.heap[0].val;
     }
 
-    return (uint32_t)((elapsed - now) / 1000);
+    if (next_us == (uint64_t)-1)
+    {
+        return 10000; // no timer, the value doesn't matter
+    }
+
+    if (next_us <= now_us)
+    {
+        // missed?
+        return 0;
+    }
+    return (uint32_t)((next_us - now_us) / 1000);
 }
 
 static void conn_done(Conn *conn)
@@ -782,25 +885,47 @@ static void conn_done(Conn *conn)
     free(conn);
 }
 
+static bool hnode_same(HNode *lhs, HNode *rhs)
+{
+    return lhs == rhs;
+}
+
 static void process_timers()
 {
-    uint64_t now = get_monotonic_usec();
+    // the extra 1000us is for the ms resolution of poll()
+    uint64_t now_us = get_monotonic_usec() + 1000;
+
+    // idle timers
     while (!dlist_empty(&g_data.idle_list))
     {
         Conn *next = container_of(g_data.idle_list.next, Conn, idle_list);
-        uint64_t elapsed = next->idle_start + k_idle_timeout_ms * 1000;
-        if (elapsed > now + 1000)
+        uint64_t next_us = next->idle_start + k_idle_timeout_ms * 1000;
+        if (next_us >= now_us)
         {
-            // not ready, the extra 1000us is for the ms resolution of poll()
+            // not ready
             break;
         }
 
-        // timeout, destroy this connection
         printf("removing idle connection: %d\n", next->fd);
         conn_done(next);
     }
-}
 
+    // TTL timers
+    const size_t k_max_works = 2000;
+    size_t nworks = 0;
+    while (!g_data.heap.empty() && g_data.heap[0].val < now_us)
+    {
+        Entry *ent = container_of(g_data.heap[0].ref, Entry, heap_idx);
+        HNode *node = hm_pop(&g_data.db, &ent->node, &hnode_same);
+        assert(node == &ent->node);
+        entry_del(ent);
+        if (nworks++ >= k_max_works)
+        {
+            // don't stall the server if too many keys are expiring at once
+            break;
+        }
+    }
+}
 int main()
 {
     // some initializations

@@ -62,7 +62,10 @@
     "chrono": "cpp",
     "compare": "cpp",
     "concepts": "cpp",
-    "algorithm": "cpp"
+    "algorithm": "cpp",
+    "deque": "cpp",
+    "list": "cpp",
+    "set": "cpp"
   },
   "C_Cpp.default.compilerPath": "/usr/bin/clang++"
 }

@@ -4,6 +4,8 @@ use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::vec::Vec;
 
+// TODO: write end-to-end test
+
 mod response;
 
 use response::on_response;
