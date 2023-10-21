@@ -5,3 +5,5 @@ server.*
 .DS_STORE
 target
 build
+.idea
+cmake-build-debug
