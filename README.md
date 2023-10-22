@@ -1,6 +1,6 @@
-# LucidDB: A simple Key-Value Database with Redis API Support
+# LucidDB: A simple Key-Value Database
 
-Lucid is a high-performance key-value database that supports the Redis API. It provides a fast and reliable storage for your applications. The server is implemented in C++. ensuring efficiency and low latency, while the client component is written in Rust, offering a safe and ergonomic interface for interacting with the database.
+Lucid is a high-performance key-value database. It provides fast and reliable storage for your applications. The server is implemented in C++, ensuring efficiency and low latency, while the client component is written in Rust, offering a safe and ergonomic interface for interacting with the database.
 
 ### Getting Started
 #### Prerequisites
